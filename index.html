@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Proxy Client</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background-color: #f8f9fa;
+            border-left: 4px solid #4285f4;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .error-box {
+            background-color: #fef2f2;
+            border-left: 4px solid #ef4444;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .success-box {
+            background-color: #f0fdf4;
+            border-left: 4px solid #22c55e;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .connection-status {
+            font-weight: bold;
+        }
+        .connected {
+            color: #22c55e;
+        }
+        .disconnected {
+            color: #ef4444;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+        }
+        button:hover {
+            background-color: #3367d6;
+        }
+        button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            min-height: 100px;
+            white-space: pre-wrap;
+        }
+        #log {
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        .timestamp {
+            color: #6b7280;
+            margin-right: 10px;
+        }
+        .success {
+            color: #22c55e;
+        }
+        .error {
+            color: #ef4444;
+        }
+        .info {
+            color: #4285f4;
+        }
+    </style>
+</head>
+<body>
+    <h1>Browser Proxy Client</h1>
+
+    <div class="container">
+        <div class="info-box">
+            <p>Status: <span id="connection-status" class="connection-status disconnected">Disconnected</span></p>
+            <button id="connectBtn">Connect as Proxy</button>
+        </div>
+
+        <div id="error-message" class="error-box"></div>
+        <div id="success-message" class="success-box"></div>
+
+        <div>
+            <label for="videoUrl">Enter Video URL:</label>
+            <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ" />
+
+            <button id="submitBtn" disabled>
+                Process Video
+            </button>
+        </div>
+
+        <div id="status">
+            <h3>Activity Log:</h3>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const connectionStatus = document.getElementById('connection-status');
+            const connectBtn = document.getElementById('connectBtn');
+            const videoUrlInput = document.getElementById('videoUrl');
+            const submitBtn = document.getElementById('submitBtn');
+            const errorBox = document.getElementById('error-message');
+            const successBox = document.getElementById('success-message');
+            const logContainer = document.getElementById('log');
+
+            let socket = null;
+
+            // Function to collect browser information
+            function collectBrowserInfo() {
+                return {
+                    userAgent: navigator.userAgent,
+                    language: navigator.language,
+                    platform: navigator.platform,
+                    screenSize: `${window.screen.width}x${window.screen.height}`,
+                    colorDepth: window.screen.colorDepth,
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    cookiesEnabled: navigator.cookieEnabled,
+                    doNotTrack: navigator.doNotTrack,
+                    plugins: Array.from(navigator.plugins).map(p => p.name).slice(0, 5)
+                };
+            }
+
+            // Log messages to the UI
+            function log(message, type = 'info') {
+                const entry = document.createElement('div');
+                entry.className = `log-entry ${type}`;
+
+                const timestamp = document.createElement('span');
+                timestamp.className = 'timestamp';
+                timestamp.textContent = new Date().toLocaleTimeString();
+
+                entry.appendChild(timestamp);
+                entry.appendChild(document.createTextNode(message));
+
+                logContainer.appendChild(entry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+
+            // Show error message
+            function showError(message) {
+                errorBox.textContent = message;
+                errorBox.style.display = 'block';
+                successBox.style.display = 'none';
+                log(message, 'error');
+            }
+
+            // Show success message
+            function showSuccess(message) {
+                successBox.textContent = message;
+                successBox.style.display = 'block';
+                errorBox.style.display = 'none';
+                log(message, 'success');
+            }
+
+            // Connect to WebSocket server
+            function connectWebSocket() {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.close();
+                }
+
+                try {
+                    // Connect to local WebSocket server
+                    socket = new WebSocket('ws://localhost:8765');
+
+                    socket.onopen = () => {
+                        // Update UI
+                        connectionStatus.textContent = 'Connected';
+                        connectionStatus.className = 'connection-status connected';
+                        connectBtn.textContent = 'Disconnect';
+                        submitBtn.disabled = false;
+
+                        // Register as a proxy with browser info
+                        const browserInfo = collectBrowserInfo();
+                        socket.send(JSON.stringify({
+                            action: 'register',
+                            userInfo: browserInfo
+                        }));
+
+                        log('Connected to server');
+                        showSuccess('Successfully connected as a proxy');
+                    };
+
+                    socket.onmessage = (event) => {
+                        const message = JSON.parse(event.data);
+
+                        if (message.action === 'registered') {
+                            log('Registered as proxy: ' + message.message);
+                        }
+                        else if (message.action === 'downloadResult') {
+                            if (message.result.status === 'success') {
+                                showSuccess('Download completed successfully');
+                                log('Download completed: ' + message.result.message);
+                            } else {
+                                showError('Download failed: ' + message.result.message);
+                                log('Download failed: ' + message.result.message, 'error');
+                            }
+                        }
+                        else if (message.action === 'proxyRequest') {
+                            log('Received proxy request for: ' + message.url);
+
+                            // Handle the proxy request from server
+                            handleProxyRequest(message);
+                        }
+                    };
+
+                    socket.onclose = () => {
+                        connectionStatus.textContent = 'Disconnected';
+                        connectionStatus.className = 'connection-status disconnected';
+                        connectBtn.textContent = 'Connect as Proxy';
+                        submitBtn.disabled = true;
+
+                        log('Disconnected from server');
+                    };
+
+                    socket.onerror = (error) => {
+                        showError('WebSocket error');
+                        log('WebSocket error', 'error');
+                        console.error('WebSocket error:', error);
+                    };
+
+                } catch (error) {
+                    showError(`Connection error: ${error.message}`);
+                    console.error('Connection error:', error);
+                }
+            }
+
+            // Handle proxy requests from the server
+            async function handleProxyRequest(message) {
+                try {
+                    // Make the request from the user's browser
+                    const response = await fetch(message.url, {
+                        method: message.method || 'GET',
+                        headers: message.headers || {},
+                        credentials: 'include'  // Include cookies
+                    });
+
+                    // For text responses
+                    if (message.responseType === 'text' || !message.responseType) {
+                        const text = await response.text();
+
+                        // Send the response back to the server
+                        socket.send(JSON.stringify({
+                            action: 'proxyResponse',
+                            requestId: message.requestId,
+                            status: response.status,
+                            headers: Object.fromEntries(response.headers.entries()),
+                            body: text,
+                            url: message.url
+                        }));
+
+                        log(`Sent ${text.length} bytes text response`);
+                    }
+                    // For binary responses
+                    else if (message.responseType === 'binary') {
+                        const blob = await response.blob();
+                        const reader = new FileReader();
+
+                        reader.onload = () => {
+                            // Send the binary response back to the server
+                            socket.send(JSON.stringify({
+                                action: 'proxyResponse',
+                                requestId: message.requestId,
+                                status: response.status,
+                                headers: Object.fromEntries(response.headers.entries()),
+                                body: reader.result.split(',')[1],  // Base64 encoded content
+                                url: message.url,
+                                isBase64: true
+                            }));
+
+                            log(`Sent ${blob.size} bytes binary response`);
+                        };
+
+                        reader.readAsDataURL(blob);
+                    }
+                } catch (error) {
+                    // Send error back to server
+                    socket.send(JSON.stringify({
+                        action: 'proxyError',
+                        requestId: message.requestId,
+                        error: error.message,
+                        url: message.url
+                    }));
+
+                    log(`Error handling proxy request: ${error.message}`, 'error');
+                }
+            }
+
+            // Connect/disconnect button
+            connectBtn.addEventListener('click', () => {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.close();
+                } else {
+                    connectWebSocket();
+                }
+            });
+
+            // Submit video URL for processing
+            submitBtn.addEventListener('click', () => {
+                const videoUrl = videoUrlInput.value.trim();
+
+                if (!videoUrl) {
+                    showError('Please enter a video URL');
+                    return;
+                }
+
+                if (!socket || socket.readyState !== WebSocket.OPEN) {
+                    showError('Not connected to server');
+                    return;
+                }
+
+                log(`Requesting download for: ${videoUrl}`);
+
+                // Send download request to server
+                socket.send(JSON.stringify({
+                    action: 'download',
+                    videoUrl: videoUrl,
+                    format: 'best'
+                }));
+            });
+        });
+    </script>
+</body>
+</html>

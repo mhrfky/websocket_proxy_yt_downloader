@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Proxy - Phase 1 Testing</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            border: 1px solid #ccc;
+            padding: 20px;
+            border-radius: 5px;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            padding: 8px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-right: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #logs {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background-color: #f9f9f9;
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-connected {
+            background-color: #4CAF50;
+        }
+        .status-disconnected {
+            background-color: #f44336;
+        }
+        .status-text {
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        h1 {
+            color: #333;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .connection-info {
+            background-color: #e9f7ef;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>WebSocket Proxy - Phase 1</h1>
+            <div>
+                <span class="status-indicator status-disconnected" id="statusIndicator"></span>
+                <span class="status-text" id="statusText">Disconnected</span>
+            </div>
+        </div>
+
+        <div class="connection-info">
+            <p><strong>Connection ID:</strong> <span id="connectionId">Not connected</span></p>
+            <p><strong>Connected since:</strong> <span id="connectedSince">-</span></p>
+        </div>
+
+        <p>This basic interface tests WebSocket connectivity and echo functionality.</p>
+
+        <div class="input-group">
+            <label for="message">Test Message:</label>
+            <input type="text" id="message" placeholder="Enter a test message to echo">
+        </div>
+
+        <div class="input-group">
+            <button id="sendBtn">Send Test Message</button>
+            <button id="reconnectBtn">Reconnect</button>
+        </div>
+
+        <div id="logs">
+            <div class="log-entry">Initializing connection...</div>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        let isConnected = false;
+        let connectionStartTime = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        let connectionId = null;
+
+        function log(message) {
+            const logsDiv = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logsDiv.appendChild(entry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        function updateConnectionStatus(connected) {
+            const indicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+
+            if (connected) {
+                indicator.className = 'status-indicator status-connected';
+                statusText.textContent = 'Connected';
+                connectionStartTime = new Date();
+                document.getElementById('connectedSince').textContent = connectionStartTime.toLocaleTimeString();
+            } else {
+                indicator.className = 'status-indicator status-disconnected';
+                statusText.textContent = 'Disconnected';
+                document.getElementById('connectionId').textContent = 'Not connected';
+                document.getElementById('connectedSince').textContent = '-';
+                connectionStartTime = null;
+            }
+        }
+
+        function connectWebSocket() {
+            // WebSocket API Gateway URL (will be replaced by GitHub Actions)
+            const wsUrl = 'WEBSOCKET_URL_PLACEHOLDER';
+
+            log(`Connecting to WebSocket at ${wsUrl}...`);
+            updateConnectionStatus(false);
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                log('WebSocket connected');
+                isConnected = true;
+                reconnectAttempts = 0;
+                updateConnectionStatus(true);
+
+                // Extract connection ID from URL if possible
+                try {
+                    // The connection ID might be available in the URL
+                    const urlParts = ws.url.split('/');
+                    connectionId = urlParts[urlParts.length - 2];
+                    document.getElementById('connectionId').textContent = connectionId || 'Unknown';
+                } catch (e) {
+                    console.error('Error extracting connection ID:', e);
+                    document.getElementById('connectionId').textContent = 'Unknown';
+                }
+            };
+
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                log(`Received message: ${JSON.stringify(data)}`);
+            };
+
+            ws.onclose = function() {
+                log('WebSocket disconnected');
+                isConnected = false;
+                updateConnectionStatus(false);
+
+                // Attempt to reconnect with backoff
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                    reconnectAttempts++;
+                    log(`Reconnecting in ${delay/1000} seconds... (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+                    setTimeout(connectWebSocket, delay);
+                } else {
+                    log('Maximum reconnect attempts reached. Please reconnect manually.');
+                }
+            };
+
+            ws.onerror = function(error) {
+                log(`WebSocket error. Check the console for details.`);
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function sendTestMessage() {
+            if (!isConnected) {
+                log('Not connected to WebSocket');
+                return;
+            }
+
+            const message = document.getElementById('message').value.trim();
+            if (!message) {
+                log('Please enter a message');
+                return;
+            }
+
+            // Send a simple echo message
+            ws.send(JSON.stringify({
+                message: message
+            }));
+
+            log(`Sent message: ${message}`);
+            document.getElementById('message').value = '';
+        }
+
+        // Event listeners
+        document.getElementById('sendBtn').addEventListener('click', sendTestMessage);
+        document.getElementById('reconnectBtn').addEventListener('click', function() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+            reconnectAttempts = 0;
+            connectWebSocket();
+        });
+
+        // Connect when page loads
+        window.addEventListener('load', connectWebSocket);
+
+        // Add listener for enter key on message input
+        document.getElementById('message').addEventListener('keyup', function(event) {
+            if (event.key === 'Enter') {
+                sendTestMessage();
+            }
+        });
+    </script>
+</body>
+</html>
