@@ -8,71 +8,68 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Set AWS credentials as environment variables at the job level
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+    
     steps:
-      - uses: actions/checkout@v3
-
+      - uses: actions/checkout@v4
+      
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
+          
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install aws-sam-cli
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
+          
+      - name: Verify AWS credentials
+        run: |
+          aws sts get-caller-identity
+          echo "AWS credentials verified successfully"
+          
+      - name: Ensure directory structure exists
+        run: |
+          mkdir -p functions/connection_handler
+          
       - name: Build SAM application
         run: sam build
-
+        
       - name: Deploy SAM application
         run: |
           sam deploy --no-confirm-changeset --no-fail-on-empty-changeset --stack-name websocket-proxy-phase1 \
             --s3-bucket ${{ secrets.DEPLOYMENT_BUCKET }} \
             --capabilities CAPABILITY_IAM
-
+            
       - name: Get WebSocket URL
         run: |
           WEBSOCKET_URL=$(aws cloudformation describe-stacks --stack-name websocket-proxy-phase1 --query 'Stacks[0].Outputs[?OutputKey==`WebSocketURI`].OutputValue' --output text)
           echo "WEBSOCKET_URL=$WEBSOCKET_URL" >> $GITHUB_ENV
-
+          
       - name: Update frontend with WebSocket URL
         run: |
           sed -i "s|WEBSOCKET_URL_PLACEHOLDER|${{ env.WEBSOCKET_URL }}|g" frontend/index.html
-
+          
       - name: Create S3 bucket for frontend if it doesn't exist
         run: |
           aws s3api head-bucket --bucket ${{ secrets.FRONTEND_BUCKET }} 2>/dev/null || aws s3 mb s3://${{ secrets.FRONTEND_BUCKET }} --region ${{ secrets.AWS_REGION }}
-
+          
       - name: Configure S3 bucket for website hosting
         run: |
           aws s3 website s3://${{ secrets.FRONTEND_BUCKET }} --index-document index.html
-
+          
       - name: Set public read access on bucket
         run: |
-          aws s3api put-bucket-policy --bucket ${{ secrets.FRONTEND_BUCKET }} --policy '{
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Sid": "PublicReadGetObject",
-                "Effect": "Allow",
-                "Principal": "*",
-                "Action": "s3:GetObject",
-                "Resource": "arn:aws:s3:::'${{ secrets.FRONTEND_BUCKET }}'/*"
-              }
-            ]
-          }'
-
+          aws s3api put-bucket-policy --bucket ${{ secrets.FRONTEND_BUCKET }} --policy "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"PublicReadGetObject\",\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::${{ secrets.FRONTEND_BUCKET }}/*\"}]}"
+          
       - name: Deploy frontend to S3
         run: |
           aws s3 sync frontend/ s3://${{ secrets.FRONTEND_BUCKET }}/ --delete
-
+          
       - name: Output website URL
         run: |
           WEBSITE_URL="http://${{ secrets.FRONTEND_BUCKET }}.s3-website-${{ secrets.AWS_REGION }}.amazonaws.com"
