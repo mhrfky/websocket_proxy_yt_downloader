@@ -8,12 +8,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Set AWS credentials as environment variables at the job level
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-    
     steps:
       - uses: actions/checkout@v4
       
@@ -26,12 +20,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install aws-sam-cli
-          
-      - name: Verify AWS credentials
+      
+      - name: Setup AWS credentials with session token
         run: |
-          aws sts get-caller-identity
-          echo "AWS credentials verified successfully"
+          # Export all three required components for temporary credentials
+          export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
+          export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          export AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}"
+          export AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}"
           
+          # Verify credentials work
+          aws sts get-caller-identity
+          
+          # Add to GITHUB_ENV to make available to subsequent steps
+          echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
+          echo "AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}" >> $GITHUB_ENV
+      
       - name: Ensure directory structure exists
         run: |
           mkdir -p functions/connection_handler
