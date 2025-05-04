@@ -56,15 +56,35 @@ jobs:
         run: |
           aws s3api head-bucket --bucket ${{ secrets.FRONTEND_BUCKET }} 2>/dev/null || aws s3 mb s3://${{ secrets.FRONTEND_BUCKET }} --region ${{ secrets.AWS_REGION }}
           
-      - name: Deploy frontend to S3 (without making public)
+      # Step 1: First check the current block public access settings
+      - name: Check current Block Public Access settings
+        run: |
+          aws s3api get-public-access-block --bucket ${{ secrets.FRONTEND_BUCKET }} || echo "No public access block settings found"
+      
+      # Step 2: Disable Block Public Access for the specific bucket
+      - name: Disable Block Public Access for frontend bucket
+        run: |
+          aws s3api put-public-access-block --bucket ${{ secrets.FRONTEND_BUCKET }} --public-access-block-configuration "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+          
+      # Step 3: Verify Block Public Access settings are disabled
+      - name: Verify Block Public Access settings are disabled
+        run: |
+          aws s3api get-public-access-block --bucket ${{ secrets.FRONTEND_BUCKET }}
+          
+      - name: Configure S3 bucket for website hosting
+        run: |
+          aws s3 website s3://${{ secrets.FRONTEND_BUCKET }} --index-document index.html
+          
+      - name: Set public read access on bucket
+        run: |
+          aws s3api put-bucket-policy --bucket ${{ secrets.FRONTEND_BUCKET }} --policy "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"PublicReadGetObject\",\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::${{ secrets.FRONTEND_BUCKET }}/*\"}]}"
+          
+      - name: Deploy frontend to S3
         run: |
           aws s3 sync frontend/ s3://${{ secrets.FRONTEND_BUCKET }}/ --delete
           
-      - name: Generate presigned URL for index.html (24 hour expiration)
+      - name: Output website URL
         run: |
-          PRESIGNED_URL=$(aws s3 presign s3://${{ secrets.FRONTEND_BUCKET }}/index.html --expires-in 86400)
-          echo "=============================================================="
-          echo "Use this URL to access your frontend (valid for 24 hours):"
-          echo $PRESIGNED_URL
-          echo "=============================================================="
-          echo "PRESIGNED_URL=$PRESIGNED_URL" >> $GITHUB_ENV
+          WEBSITE_URL="http://${{ secrets.FRONTEND_BUCKET }}.s3-website-${{ secrets.AWS_REGION }}.amazonaws.com"
+          echo "Frontend deployed to: $WEBSITE_URL"
+          echo "WEBSITE_URL=$WEBSITE_URL" >> $GITHUB_ENV
