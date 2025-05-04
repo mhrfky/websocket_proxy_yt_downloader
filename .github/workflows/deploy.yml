@@ -8,6 +8,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
     steps:
       - uses: actions/checkout@v4
       
@@ -21,23 +26,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install aws-sam-cli
       
-      - name: Setup AWS credentials with session token
+      - name: Verify AWS credentials
         run: |
-          # Export all three required components for temporary credentials
-          export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
-          export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-          export AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}"
-          export AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}"
-          
-          # Verify credentials work
           aws sts get-caller-identity
           
-          # Add to GITHUB_ENV to make available to subsequent steps
-          echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
-          echo "AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}" >> $GITHUB_ENV
-      
       - name: Ensure directory structure exists
         run: |
           mkdir -p functions/connection_handler
@@ -64,20 +56,15 @@ jobs:
         run: |
           aws s3api head-bucket --bucket ${{ secrets.FRONTEND_BUCKET }} 2>/dev/null || aws s3 mb s3://${{ secrets.FRONTEND_BUCKET }} --region ${{ secrets.AWS_REGION }}
           
-      - name: Configure S3 bucket for website hosting
-        run: |
-          aws s3 website s3://${{ secrets.FRONTEND_BUCKET }} --index-document index.html
-          
-      - name: Set public read access on bucket
-        run: |
-          aws s3api put-bucket-policy --bucket ${{ secrets.FRONTEND_BUCKET }} --policy "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"PublicReadGetObject\",\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::${{ secrets.FRONTEND_BUCKET }}/*\"}]}"
-          
-      - name: Deploy frontend to S3
+      - name: Deploy frontend to S3 (without making public)
         run: |
           aws s3 sync frontend/ s3://${{ secrets.FRONTEND_BUCKET }}/ --delete
           
-      - name: Output website URL
+      - name: Generate presigned URL for index.html (24 hour expiration)
         run: |
-          WEBSITE_URL="http://${{ secrets.FRONTEND_BUCKET }}.s3-website-${{ secrets.AWS_REGION }}.amazonaws.com"
-          echo "Frontend deployed to: $WEBSITE_URL"
-          echo "WEBSITE_URL=$WEBSITE_URL" >> $GITHUB_ENV
+          PRESIGNED_URL=$(aws s3 presign s3://${{ secrets.FRONTEND_BUCKET }}/index.html --expires-in 86400)
+          echo "=============================================================="
+          echo "Use this URL to access your frontend (valid for 24 hours):"
+          echo $PRESIGNED_URL
+          echo "=============================================================="
+          echo "PRESIGNED_URL=$PRESIGNED_URL" >> $GITHUB_ENV
